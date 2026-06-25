@@ -139,20 +139,24 @@ background. You bind the actual keys **in your compositor**, not in OBS:
    You'll see entries like (the `appid` prefix depends on your portal):
 
    ```
-   com.obsproject.Studio:slot1 -> Breadcrumb slot 1 (Boss)
-   com.obsproject.Studio:slot2 -> Breadcrumb slot 2 (Death)
+   com.obsproject.Studio:breadcrumbs-slot1 -> Breadcrumb slot 1 (Boss)
+   com.obsproject.Studio:breadcrumbs-slot2 -> Breadcrumb slot 2 (Death)
    ...
    ```
+
+   The `com.obsproject.Studio` prefix is the app id Breadcrumbs registers with
+   the portal (OBS itself registers no global shortcuts, so the
+   `breadcrumbs-slotN` names are unambiguously ours).
 
 2. Bind keys to those names with the `global` dispatcher in `hyprland.conf`,
    using the exact name from step 1:
 
    ```ini
-   bind = $mainMod, F7, global, com.obsproject.Studio:slot1
-   bind = $mainMod, F8, global, com.obsproject.Studio:slot2
-   bind = $mainMod, F9, global, com.obsproject.Studio:slot3
-   bind = $mainMod, F10, global, com.obsproject.Studio:slot4
-   bind = $mainMod, F11, global, com.obsproject.Studio:slot5
+   bind = $mainMod, F7,  global, com.obsproject.Studio:breadcrumbs-slot1
+   bind = $mainMod, F8,  global, com.obsproject.Studio:breadcrumbs-slot2
+   bind = $mainMod, F9,  global, com.obsproject.Studio:breadcrumbs-slot3
+   bind = $mainMod, F10, global, com.obsproject.Studio:breadcrumbs-slot4
+   bind = $mainMod, F11, global, com.obsproject.Studio:breadcrumbs-slot5
    ```
 
    Reload (`hyprctl reload`) and the keys work regardless of OBS focus.

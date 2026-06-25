@@ -222,6 +222,11 @@ void on_frontend_event(enum obs_frontend_event event, void *)
 		// On Wayland, OBS's own hotkeys can't fire while unfocused; register
 		// global shortcuts via the desktop portal instead. No-op elsewhere.
 		breadcrumbs_wayland_init();
+	} else if (event == OBS_FRONTEND_EVENT_EXIT) {
+		// Tear down the Qt/D-Bus portal object here, while the Qt app is still
+		// alive. Doing it in obs_module_unload would run after Qt is destroyed
+		// and crash OBS during shutdown.
+		breadcrumbs_wayland_shutdown();
 #endif
 	}
 }
@@ -279,9 +284,8 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
-#if defined(__linux__)
-	breadcrumbs_wayland_shutdown();
-#endif
+	// Note: the Wayland portal object is torn down on OBS_FRONTEND_EVENT_EXIT,
+	// not here — by the time obs_module_unload runs, Qt is already gone.
 	obs_frontend_remove_event_callback(on_frontend_event, nullptr);
 	for (size_t i = 0; i < BREADCRUMBS_SLOTS; i++)
 		obs_hotkey_unregister(g_hotkeys[i]);

@@ -22,16 +22,19 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <plugin-support.h>
 #include <util/base.h> // LOG_INFO / LOG_WARNING
 
+#include <QCoreApplication>
 #include <QDBusArgument>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusMetaType>
 #include <QDBusObjectPath>
-#include <QDBusPendingCall>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QGuiApplication>
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QThread>
 #include <QVariantMap>
 
 #include <memory>
@@ -42,6 +45,19 @@ constexpr const char *kPortalService = "org.freedesktop.portal.Desktop";
 constexpr const char *kPortalPath = "/org/freedesktop/portal/desktop";
 constexpr const char *kShortcutsIface = "org.freedesktop.portal.GlobalShortcuts";
 constexpr const char *kRequestIface = "org.freedesktop.portal.Request";
+constexpr const char *kRegistryIface = "org.freedesktop.host.portal.Registry";
+
+// App id declared to the portal; becomes the "<app-id>:slotN" prefix the
+// compositor uses (e.g. in `hyprctl globalshortcuts`). The portal validates
+// this against an installed .desktop file, so we use OBS's own id (OBS itself
+// registers no global shortcuts, so these names are unambiguously ours).
+constexpr const char *kAppId = "com.obsproject.Studio";
+
+// We use a *private* D-Bus connection rather than the shared sessionBus():
+// OBS already associated the shared connection with its own (empty) app id,
+// which makes the portal reject our Register and refuse the session. A fresh
+// connection lets us register our own app id.
+constexpr const char *kConnName = "obs-breadcrumbs-portal";
 
 // One entry of the BindShortcuts `a(sa{sv})` argument: (id, {description, ...}).
 struct PortalShortcut {
@@ -72,35 +88,52 @@ Q_DECLARE_METATYPE(QList<PortalShortcut>)
 
 namespace {
 
-// Drives the portal handshake: CreateSession -> (Response) -> BindShortcuts,
-// and routes Activated signals to the matching breadcrumb slot.
+// Drives the portal handshake: CreateSession -> (Response) -> BindShortcuts ->
+// (Response), then routes Activated signals to the matching breadcrumb slot.
+//
+// Request.Response signals are matched by interface+member only (no path/sender
+// filter): they are unicast to our connection, and QtDBus's path-based hook
+// matching does not catch them. Because the handshake is strictly sequential, a
+// small phase flag tells the CreateSession response from the BindShortcuts one.
 class BreadcrumbsPortal : public QObject {
 	Q_OBJECT
+
+	enum class Phase { Create, Bind, Done };
 
 public:
 	BreadcrumbsPortal()
 	{
-		auto bus = QDBusConnection::sessionBus();
-		if (!bus.isConnected()) {
+		bus_ = QDBusConnection::connectToBus(QDBusConnection::SessionBus, QString::fromUtf8(kConnName));
+		if (!bus_.isConnected()) {
 			obs_log(LOG_WARNING, "wayland: no session D-Bus; global shortcuts unavailable");
 			return;
 		}
 
-		// Predict the portal's per-request/session object paths from our unique
-		// bus name so we can subscribe before the calls land (avoids a race).
-		QString token = bus.baseService();      // e.g. ":1.42"
-		token = token.mid(1).replace('.', '_'); // "1_42"
-		sessionPath_ = QStringLiteral("/org/freedesktop/portal/desktop/session/%1/breadcrumbs").arg(token);
-		QString createReq = QStringLiteral("/org/freedesktop/portal/desktop/request/%1/bccreate").arg(token);
-		QString bindReq = QStringLiteral("/org/freedesktop/portal/desktop/request/%1/bcbind").arg(token);
+		bus_.connect(QString(), QString(), kRequestIface, QStringLiteral("Response"), this,
+			     SLOT(onResponse(uint, QVariantMap)));
+		// Match by interface+member only (no path), same as Response — QtDBus's
+		// path-filtered matching does not catch these portal signals.
+		bus_.connect(QString(), QString(), kShortcutsIface, QStringLiteral("Activated"), this,
+			     SLOT(onActivated(QDBusObjectPath, QString, qulonglong, QVariantMap)));
 
-		bus.connect(kPortalService, createReq, kRequestIface, QStringLiteral("Response"), this,
-			    SLOT(onCreateResponse(uint, QVariantMap)));
-		bus.connect(kPortalService, bindReq, kRequestIface, QStringLiteral("Response"), this,
-			    SLOT(onBindResponse(uint, QVariantMap)));
-		bus.connect(kPortalService, kPortalPath, kShortcutsIface, QStringLiteral("Activated"), this,
-			    SLOT(onActivated(QDBusObjectPath, QString, qulonglong, QVariantMap)));
+		// Unsandboxed apps must declare an app id before the portal will create
+		// a GlobalShortcuts session ("An app id is required" otherwise).
+		QDBusMessage reg = QDBusMessage::createMethodCall(kPortalService, kPortalPath, kRegistryIface,
+								  QStringLiteral("Register"));
+		reg << QString::fromUtf8(kAppId) << QVariantMap();
+		QDBusMessage regReply = bus_.call(reg, QDBus::Block, 3000);
+		if (regReply.type() == QDBusMessage::ErrorMessage)
+			obs_log(LOG_WARNING, "wayland: app-id registration: %s (continuing anyway)",
+				qUtf8Printable(regReply.errorMessage()));
 
+		createSession();
+	}
+
+	~BreadcrumbsPortal() override { QDBusConnection::disconnectFromBus(QString::fromUtf8(kConnName)); }
+
+private:
+	void createSession()
+	{
 		QVariantMap options;
 		options[QStringLiteral("handle_token")] = QStringLiteral("bccreate");
 		options[QStringLiteral("session_handle_token")] = QStringLiteral("breadcrumbs");
@@ -108,18 +141,14 @@ public:
 		QDBusMessage msg = QDBusMessage::createMethodCall(kPortalService, kPortalPath, kShortcutsIface,
 								  QStringLiteral("CreateSession"));
 		msg << options;
-		bus.asyncCall(msg);
-		obs_log(LOG_INFO, "wayland: requesting global-shortcuts session");
+
+		auto *watcher = new QDBusPendingCallWatcher(bus_.asyncCall(msg), this);
+		connect(watcher, &QDBusPendingCallWatcher::finished, this, &BreadcrumbsPortal::onMethodReturn);
+		obs_log(LOG_INFO, "wayland: creating global-shortcuts session");
 	}
 
-private slots:
-	void onCreateResponse(uint response, const QVariantMap &)
+	void bindShortcuts()
 	{
-		if (response != 0) {
-			obs_log(LOG_WARNING, "wayland: shortcuts session denied (response %u)", response);
-			return;
-		}
-
 		QList<PortalShortcut> shortcuts;
 		std::array<std::string, BREADCRUMBS_SLOTS> categories = breadcrumbs_get_categories();
 		for (size_t i = 0; i < BREADCRUMBS_SLOTS; i++) {
@@ -127,7 +156,7 @@ private slots:
 			if (!categories[i].empty())
 				desc += QStringLiteral(" (%1)").arg(QString::fromStdString(categories[i]));
 			PortalShortcut s;
-			s.id = QStringLiteral("slot%1").arg(static_cast<int>(i + 1));
+			s.id = QStringLiteral("breadcrumbs-slot%1").arg(static_cast<int>(i + 1));
 			s.props[QStringLiteral("description")] = desc;
 			shortcuts.append(s);
 		}
@@ -139,29 +168,61 @@ private slots:
 								  QStringLiteral("BindShortcuts"));
 		msg << QVariant::fromValue(QDBusObjectPath(sessionPath_)) << QVariant::fromValue(shortcuts) << QString()
 		    << options;
-		QDBusConnection::sessionBus().asyncCall(msg);
-		obs_log(LOG_INFO, "wayland: binding %d global shortcuts", static_cast<int>(BREADCRUMBS_SLOTS));
+
+		auto *watcher = new QDBusPendingCallWatcher(bus_.asyncCall(msg), this);
+		connect(watcher, &QDBusPendingCallWatcher::finished, this, &BreadcrumbsPortal::onMethodReturn);
+		obs_log(LOG_INFO, "wayland: binding %d shortcuts", static_cast<int>(BREADCRUMBS_SLOTS));
 	}
 
-	void onBindResponse(uint response, const QVariantMap &)
+private slots:
+	// Surfaces D-Bus errors from the CreateSession / BindShortcuts method calls
+	// (the useful results arrive later via the Response signal).
+	void onMethodReturn(QDBusPendingCallWatcher *watcher)
 	{
-		if (response != 0) {
-			obs_log(LOG_WARNING, "wayland: BindShortcuts failed (response %u)", response);
-			return;
+		QDBusPendingReply<QDBusObjectPath> reply = *watcher;
+		watcher->deleteLater();
+		if (reply.isError())
+			obs_log(LOG_WARNING, "wayland: portal call failed: %s",
+				qUtf8Printable(reply.error().message()));
+	}
+
+	void onResponse(uint response, const QVariantMap &results)
+	{
+		if (phase_ == Phase::Create) {
+			phase_ = Phase::Bind;
+			if (response != 0) {
+				obs_log(LOG_WARNING, "wayland: shortcuts session denied (response %u)", response);
+				return;
+			}
+			QVariant handle = results.value(QStringLiteral("session_handle"));
+			sessionPath_ = handle.canConvert<QDBusObjectPath>() ? handle.value<QDBusObjectPath>().path()
+									    : handle.toString();
+			if (sessionPath_.isEmpty()) {
+				obs_log(LOG_WARNING, "wayland: session created but no session_handle returned");
+				return;
+			}
+			bindShortcuts();
+		} else if (phase_ == Phase::Bind) {
+			phase_ = Phase::Done;
+			if (response != 0) {
+				obs_log(LOG_WARNING, "wayland: BindShortcuts rejected (response %u)", response);
+				return;
+			}
+			obs_log(LOG_INFO, "wayland: global shortcuts registered "
+					  "(bind them in your compositor; see `hyprctl globalshortcuts`)");
 		}
-		obs_log(LOG_INFO, "wayland: global shortcuts registered "
-				  "(bind them in your compositor; see `hyprctl globalshortcuts`)");
 	}
 
 	void onActivated(const QDBusObjectPath &session, const QString &shortcutId, qulonglong, const QVariantMap &)
 	{
 		if (session.path() != sessionPath_)
 			return;
-		if (!shortcutId.startsWith(QStringLiteral("slot")))
+		const QString prefix = QStringLiteral("breadcrumbs-slot");
+		if (!shortcutId.startsWith(prefix))
 			return;
 
 		bool ok = false;
-		int n = shortcutId.mid(4).toInt(&ok); // "slot3" -> 3
+		int n = shortcutId.mid(prefix.size()).toInt(&ok); // "breadcrumbs-slot3" -> 3
 		if (!ok || n < 1 || n > static_cast<int>(BREADCRUMBS_SLOTS))
 			return;
 
@@ -169,7 +230,9 @@ private slots:
 	}
 
 private:
+	QDBusConnection bus_ = QDBusConnection::sessionBus();
 	QString sessionPath_;
+	Phase phase_ = Phase::Create;
 };
 
 std::unique_ptr<BreadcrumbsPortal> g_portal;
@@ -193,12 +256,24 @@ void breadcrumbs_wayland_init()
 	qDBusRegisterMetaType<PortalShortcut>();
 	qDBusRegisterMetaType<QList<PortalShortcut>>();
 
-	g_portal = std::make_unique<BreadcrumbsPortal>();
+	// Create on the GUI thread so the private D-Bus connection integrates with
+	// the running Qt event loop.
+	QMetaObject::invokeMethod(
+		qApp,
+		[]() {
+			if (!g_portal)
+				g_portal = std::make_unique<BreadcrumbsPortal>();
+		},
+		Qt::QueuedConnection);
 }
 
 void breadcrumbs_wayland_shutdown()
 {
-	g_portal.reset();
+	if (QThread::currentThread() == qApp->thread()) {
+		g_portal.reset();
+	} else {
+		QMetaObject::invokeMethod(qApp, []() { g_portal.reset(); }, Qt::BlockingQueuedConnection);
+	}
 }
 
 #include "wayland-shortcuts.moc"
