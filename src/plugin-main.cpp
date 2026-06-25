@@ -106,6 +106,63 @@ void save_config()
 	obs_data_release(data);
 }
 
+// --- hotkey binding persistence ---
+//
+// OBS's frontend does not reliably restore plugin-registered frontend hotkeys
+// across restarts (it saves them to the profile, but doesn't re-apply them to
+// our hotkeys on load). So we persist the bindings ourselves.
+
+std::string hotkeys_path()
+{
+	char *p = obs_module_config_path("hotkeys.json");
+	std::string s = p ? p : "";
+	bfree(p);
+	return s;
+}
+
+void save_hotkeys()
+{
+	char *dir = obs_module_config_path("");
+	if (dir) {
+		os_mkdirs(dir);
+		bfree(dir);
+	}
+
+	obs_data_t *data = obs_data_create();
+	for (size_t i = 0; i < BREADCRUMBS_SLOTS; i++) {
+		char name[32];
+		snprintf(name, sizeof(name), "breadcrumbs.slot%zu", i + 1);
+		obs_data_array_t *arr = obs_hotkey_save(g_hotkeys[i]);
+		obs_data_set_array(data, name, arr);
+		obs_data_array_release(arr);
+	}
+	obs_data_save_json(data, hotkeys_path().c_str());
+	obs_data_release(data);
+}
+
+void load_hotkeys()
+{
+	obs_data_t *data = obs_data_create_from_json_file(hotkeys_path().c_str());
+	if (!data)
+		return;
+	for (size_t i = 0; i < BREADCRUMBS_SLOTS; i++) {
+		char name[32];
+		snprintf(name, sizeof(name), "breadcrumbs.slot%zu", i + 1);
+		obs_data_array_t *arr = obs_data_get_array(data, name);
+		if (arr) {
+			obs_hotkey_load(g_hotkeys[i], arr);
+			obs_data_array_release(arr);
+		}
+	}
+	obs_data_release(data);
+}
+
+void on_frontend_save(obs_data_t *, bool saving, void *)
+{
+	if (saving)
+		save_hotkeys();
+}
+
 // Turn "/foo/bar/run.mkv" into "/foo/bar/run.txt" (sidecar next to the recording).
 std::string replace_ext_txt(const std::string &p)
 {
@@ -217,12 +274,17 @@ void on_frontend_event(enum obs_frontend_event event, void *)
 	} else if (event == OBS_FRONTEND_EVENT_RECORDING_STOPPED) {
 		std::lock_guard<std::mutex> lock(g_mutex);
 		g_record_path.clear();
-#if defined(__linux__)
 	} else if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
+		// Restore our hotkey bindings after OBS has finished its own load.
+		load_hotkeys();
+#if defined(__linux__)
 		// On Wayland, OBS's own hotkeys can't fire while unfocused; register
 		// global shortcuts via the desktop portal instead. No-op elsewhere.
 		breadcrumbs_wayland_init();
+#endif
 	} else if (event == OBS_FRONTEND_EVENT_EXIT) {
+		save_hotkeys();
+#if defined(__linux__)
 		// Tear down the Qt/D-Bus portal object here, while the Qt app is still
 		// alive. Doing it in obs_module_unload would run after Qt is destroyed
 		// and crash OBS during shutdown.
@@ -276,6 +338,7 @@ bool obs_module_load(void)
 	}
 
 	obs_frontend_add_event_callback(on_frontend_event, nullptr);
+	obs_frontend_add_save_callback(on_frontend_save, nullptr);
 	obs_frontend_add_tools_menu_item(obs_module_text("Breadcrumbs.Menu"), tools_menu_clicked, nullptr);
 
 	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
@@ -286,6 +349,7 @@ void obs_module_unload(void)
 {
 	// Note: the Wayland portal object is torn down on OBS_FRONTEND_EVENT_EXIT,
 	// not here — by the time obs_module_unload runs, Qt is already gone.
+	obs_frontend_remove_save_callback(on_frontend_save, nullptr);
 	obs_frontend_remove_event_callback(on_frontend_event, nullptr);
 	for (size_t i = 0; i < BREADCRUMBS_SLOTS; i++)
 		obs_hotkey_unregister(g_hotkeys[i]);
