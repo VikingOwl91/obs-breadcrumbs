@@ -38,7 +38,7 @@
     },
     "name": "obs-breadcrumbs",
     "displayName": "Breadcrumbs",
-    "version": "1.1.1",
+    "version": "1.2.0",
     "author": "Christian Nachtigall",
     "website": "https://github.com/VikingOwl91/obs-breadcrumbs",
     "email": "christian@nachtigall.dev"
