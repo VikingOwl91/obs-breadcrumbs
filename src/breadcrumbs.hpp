@@ -30,3 +30,8 @@ std::array<std::string, BREADCRUMBS_SLOTS> breadcrumbs_get_categories();
 
 // Replace all category names and persist them to the module config.
 void breadcrumbs_set_categories(const std::array<std::string, BREADCRUMBS_SLOTS> &categories);
+
+// Record a breadcrumb for the given slot (0-based), exactly as a hotkey press
+// would. Used by alternative trigger paths such as the Wayland global-shortcuts
+// portal. Safe to call from the Qt UI thread.
+void breadcrumbs_trigger_slot(size_t slot);

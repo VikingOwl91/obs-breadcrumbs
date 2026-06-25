@@ -24,8 +24,14 @@ if(ENABLE_FRONTEND_API)
 endif()
 
 if(ENABLE_QT)
-  find_package(Qt6 COMPONENTS Widgets Core)
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
+  # Qt6::DBus (Linux only) drives the GlobalShortcuts portal for Wayland hotkeys.
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Qt6 COMPONENTS Widgets Core DBus)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets Qt6::DBus)
+  else()
+    find_package(Qt6 COMPONENTS Widgets Core)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
+  endif()
   target_compile_options(
     ${CMAKE_PROJECT_NAME}
     PRIVATE $<$<C_COMPILER_ID:Clang,AppleClang>:-Wno-quoted-include-in-framework-header -Wno-comma>
@@ -40,5 +46,9 @@ target_sources(
   ${CMAKE_PROJECT_NAME}
   PRIVATE src/plugin-main.cpp src/breadcrumbs-config.cpp src/breadcrumbs-config.hpp src/breadcrumbs.hpp
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/wayland-shortcuts.cpp src/wayland-shortcuts.hpp)
+endif()
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

@@ -29,6 +29,9 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <plugin-support.h>
 #include "breadcrumbs.hpp"
 #include "breadcrumbs-config.hpp"
+#if defined(__linux__)
+#include "wayland-shortcuts.hpp"
+#endif
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
@@ -214,6 +217,12 @@ void on_frontend_event(enum obs_frontend_event event, void *)
 	} else if (event == OBS_FRONTEND_EVENT_RECORDING_STOPPED) {
 		std::lock_guard<std::mutex> lock(g_mutex);
 		g_record_path.clear();
+#if defined(__linux__)
+	} else if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
+		// On Wayland, OBS's own hotkeys can't fire while unfocused; register
+		// global shortcuts via the desktop portal instead. No-op elsewhere.
+		breadcrumbs_wayland_init();
+#endif
 	}
 }
 
@@ -241,6 +250,11 @@ void breadcrumbs_set_categories(const std::array<std::string, BREADCRUMBS_SLOTS>
 	save_config();
 }
 
+void breadcrumbs_trigger_slot(size_t slot)
+{
+	add_breadcrumb(slot);
+}
+
 // --- module entry points ---
 
 bool obs_module_load(void)
@@ -265,6 +279,9 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
+#if defined(__linux__)
+	breadcrumbs_wayland_shutdown();
+#endif
 	obs_frontend_remove_event_callback(on_frontend_event, nullptr);
 	for (size_t i = 0; i < BREADCRUMBS_SLOTS; i++)
 		obs_hotkey_unregister(g_hotkeys[i]);

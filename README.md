@@ -111,6 +111,64 @@ Launch OBS from a terminal and look for:
 (Logs are also written to OBS's log folder, viewable via **Help → Log Files**.)
 Then check that **Tools → Breadcrumbs…** and the **Breadcrumb** hotkeys exist.
 
+## Hotkeys on Linux/Wayland
+
+On **Windows and macOS**, the **Settings → Hotkeys** bindings are true global
+hotkeys — they fire even when OBS is in the background, nothing extra to do.
+(macOS will ask you to grant OBS *Accessibility / Input Monitoring* permission
+the first time — that's required for any OBS background hotkey.)
+
+**Wayland is different:** the compositor refuses to deliver key presses to an
+app that isn't focused, so OBS's own hotkeys — and therefore the *Settings →
+Hotkeys* bindings — **won't fire while OBS is hidden**. This affects every OBS
+hotkey, not just Breadcrumbs.
+
+To work around it, Breadcrumbs registers its five slots as **global shortcuts
+via the `org.freedesktop.portal.GlobalShortcuts` desktop portal** when OBS
+starts on Wayland. Your compositor then routes the keys, even when OBS is in the
+background. You bind the actual keys **in your compositor**, not in OBS:
+
+### Hyprland
+
+1. Start OBS once (so the shortcuts register), then list them:
+
+   ```bash
+   hyprctl globalshortcuts
+   ```
+
+   You'll see entries like (the `appid` prefix depends on your portal):
+
+   ```
+   com.obsproject.Studio:slot1 -> Breadcrumb slot 1 (Boss)
+   com.obsproject.Studio:slot2 -> Breadcrumb slot 2 (Death)
+   ...
+   ```
+
+2. Bind keys to those names with the `global` dispatcher in `hyprland.conf`,
+   using the exact name from step 1:
+
+   ```ini
+   bind = $mainMod, F7, global, com.obsproject.Studio:slot1
+   bind = $mainMod, F8, global, com.obsproject.Studio:slot2
+   bind = $mainMod, F9, global, com.obsproject.Studio:slot3
+   bind = $mainMod, F10, global, com.obsproject.Studio:slot4
+   bind = $mainMod, F11, global, com.obsproject.Studio:slot5
+   ```
+
+   Reload (`hyprctl reload`) and the keys work regardless of OBS focus.
+
+### KDE Plasma / GNOME
+
+These expose portal global shortcuts in their settings UI: bind the
+**Breadcrumb slot N** entries under **System Settings → Shortcuts** (KDE) or
+**Settings → Keyboard → Keyboard Shortcuts** (GNOME 48+).
+
+> The portal shortcut descriptions include your category names, but the names
+> are captured when OBS starts — if you rename categories, restart OBS so the
+> updated labels show up in `hyprctl globalshortcuts` / your shortcut settings.
+> The X11 session is unaffected: there OBS's normal global hotkeys work and the
+> portal isn't used.
+
 ## Building from source
 
 The project uses the standard OBS plugin build system (CMake + the official
