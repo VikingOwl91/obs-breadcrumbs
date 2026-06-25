@@ -35,6 +35,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QObject>
 #include <QString>
 #include <QThread>
+#include <QTimer>
 #include <QVariantMap>
 
 #include <memory>
@@ -158,12 +159,6 @@ private:
 			PortalShortcut s;
 			s.id = QStringLiteral("breadcrumbs-slot%1").arg(static_cast<int>(i + 1));
 			s.props[QStringLiteral("description")] = desc;
-			// Suggest the slot's current OBS hotkey as the default trigger.
-			// Portals may ignore this (Hyprland does); KDE/GNOME pre-fill it
-			// so the user can accept the binding with one click.
-			std::string trigger = breadcrumbs_get_slot_trigger(i);
-			if (!trigger.empty())
-				s.props[QStringLiteral("preferred_trigger")] = QString::fromStdString(trigger);
 			shortcuts.append(s);
 		}
 
@@ -210,6 +205,12 @@ private slots:
 			bindShortcuts();
 		} else if (phase_ == Phase::Bind) {
 			phase_ = Phase::Done;
+			// The broad (empty service+path) Response match was only needed for
+			// the handshake; drop it now so we don't keep receiving every other
+			// app's portal Request.Response on this connection. We keep only the
+			// GlobalShortcuts.Activated subscription from here on.
+			bus_.disconnect(QString(), QString(), kRequestIface, QStringLiteral("Response"), this,
+					SLOT(onResponse(uint, QVariantMap)));
 			if (response != 0) {
 				obs_log(LOG_WARNING, "wayland: BindShortcuts rejected (response %u)", response);
 				return;
@@ -243,6 +244,19 @@ private:
 
 std::unique_ptr<BreadcrumbsPortal> g_portal;
 
+// Set true on shutdown so a still-pending deferred init (see below) does not
+// create the portal object while OBS is tearing down.
+bool g_portal_cancelled = false;
+
+// We register global shortcuts a few seconds AFTER startup rather than during
+// OBS_FRONTEND_EVENT_FINISHED_LOADING. OBS fires several of its own portal
+// calls while loading (appearance/Settings, inhibitor, screencast); on at least
+// xdg-desktop-portal-hyprland a GlobalShortcuts bind issued in that window can
+// intermittently wedge the portal for ~a minute, which then stalls OBS's own
+// portal.Settings query and freezes the Settings dialog. Waiting until startup
+// has settled avoids overlapping that fragile window.
+constexpr int kInitDelayMs = 10000;
+
 bool running_on_wayland()
 {
 	if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland"), Qt::CaseInsensitive))
@@ -259,26 +273,41 @@ void breadcrumbs_wayland_init()
 	if (!running_on_wayland())
 		return; // X11/other: OBS's own hotkeys work; nothing to do.
 
+	// Escape hatch: lets a user who hits the xdph portal bug disable our
+	// global-shortcut registration entirely (hotkeys then work focused-only).
+	if (qgetenv("OBS_BREADCRUMBS_NO_PORTAL") == QByteArray("1")) {
+		obs_log(LOG_INFO, "wayland: global shortcuts disabled via OBS_BREADCRUMBS_NO_PORTAL");
+		return;
+	}
+
 	qDBusRegisterMetaType<PortalShortcut>();
 	qDBusRegisterMetaType<QList<PortalShortcut>>();
 
-	// Create on the GUI thread so the private D-Bus connection integrates with
-	// the running Qt event loop.
+	g_portal_cancelled = false;
+
+	// Create on the GUI thread (so the private D-Bus connection integrates with
+	// the running Qt event loop), deferred past the startup portal congestion.
 	QMetaObject::invokeMethod(
 		qApp,
 		[]() {
-			if (!g_portal)
-				g_portal = std::make_unique<BreadcrumbsPortal>();
+			QTimer::singleShot(kInitDelayMs, qApp, []() {
+				if (!g_portal && !g_portal_cancelled)
+					g_portal = std::make_unique<BreadcrumbsPortal>();
+			});
 		},
 		Qt::QueuedConnection);
 }
 
 void breadcrumbs_wayland_shutdown()
 {
-	if (QThread::currentThread() == qApp->thread()) {
+	auto teardown = []() {
+		g_portal_cancelled = true; // cancel a deferred init that hasn't fired yet
 		g_portal.reset();
+	};
+	if (QThread::currentThread() == qApp->thread()) {
+		teardown();
 	} else {
-		QMetaObject::invokeMethod(qApp, []() { g_portal.reset(); }, Qt::BlockingQueuedConnection);
+		QMetaObject::invokeMethod(qApp, teardown, Qt::BlockingQueuedConnection);
 	}
 }
 

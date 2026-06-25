@@ -165,27 +165,28 @@ background. You bind the actual keys **in your compositor**, not in OBS:
 
 These expose portal global shortcuts in their settings UI: find the
 **Breadcrumb slot N** entries under **System Settings → Shortcuts** (KDE) or
-**Settings → Keyboard → Keyboard Shortcuts** (GNOME 48+).
+**Settings → Keyboard → Keyboard Shortcuts** (GNOME 48+) and assign a key to
+each.
 
-Breadcrumbs sends each slot's **current OBS hotkey as a suggested default**
-(`preferred_trigger`), so if you already bound, say, *Settings → Hotkeys →
-Breadcrumb slot 1* to `Super+F8`, that combination is pre-filled — you can
-accept it with one click instead of choosing a key from scratch. (Bindings are
-read when OBS starts, so set them in *Settings → Hotkeys* first, then restart.)
-
-> The portal shortcut descriptions include your category names, but both the
-> names and the suggested triggers are captured when OBS starts — if you rename
-> categories or change the *Settings → Hotkeys* bindings, restart OBS so the
-> updated labels and defaults show up in `hyprctl globalshortcuts` / your
-> shortcut settings.
->
-> **Hyprland ignores the suggested default** (and `hyprctl globalshortcuts` only
-> lists the id → description, never the trigger) — you always bind the key
-> yourself with the `global` dispatcher, as shown above. The pre-fill is a
-> KDE/GNOME convenience.
+> The portal shortcut descriptions include your category names, captured when
+> OBS starts — if you rename categories, restart OBS so the updated labels show
+> up in `hyprctl globalshortcuts` / your shortcut settings.
 >
 > The X11 session is unaffected: there OBS's normal global hotkeys work and the
 > portal isn't used.
+
+### Notes & troubleshooting
+
+- The shortcuts are registered a few seconds **after** OBS finishes loading
+  (not during startup). This is deliberate: issuing the registration mid-startup
+  can intermittently upset some desktop portals (notably
+  `xdg-desktop-portal-hyprland`) and briefly hang OBS's own **Settings** dialog.
+  So expect the `breadcrumbs-slotN` entries to appear in
+  `hyprctl globalshortcuts` a moment after launch.
+- If global shortcuts ever cause trouble, set the environment variable
+  **`OBS_BREADCRUMBS_NO_PORTAL=1`** before launching OBS to skip portal
+  registration entirely (hotkeys then work only while OBS is focused, like any
+  normal OBS hotkey on Wayland).
 
 ## Building from source
 
