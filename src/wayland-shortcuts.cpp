@@ -158,6 +158,12 @@ private:
 			PortalShortcut s;
 			s.id = QStringLiteral("breadcrumbs-slot%1").arg(static_cast<int>(i + 1));
 			s.props[QStringLiteral("description")] = desc;
+			// Suggest the slot's current OBS hotkey as the default trigger.
+			// Portals may ignore this (Hyprland does); KDE/GNOME pre-fill it
+			// so the user can accept the binding with one click.
+			std::string trigger = breadcrumbs_get_slot_trigger(i);
+			if (!trigger.empty())
+				s.props[QStringLiteral("preferred_trigger")] = QString::fromStdString(trigger);
 			shortcuts.append(s);
 		}
 

@@ -163,13 +163,27 @@ background. You bind the actual keys **in your compositor**, not in OBS:
 
 ### KDE Plasma / GNOME
 
-These expose portal global shortcuts in their settings UI: bind the
+These expose portal global shortcuts in their settings UI: find the
 **Breadcrumb slot N** entries under **System Settings → Shortcuts** (KDE) or
 **Settings → Keyboard → Keyboard Shortcuts** (GNOME 48+).
 
-> The portal shortcut descriptions include your category names, but the names
-> are captured when OBS starts — if you rename categories, restart OBS so the
-> updated labels show up in `hyprctl globalshortcuts` / your shortcut settings.
+Breadcrumbs sends each slot's **current OBS hotkey as a suggested default**
+(`preferred_trigger`), so if you already bound, say, *Settings → Hotkeys →
+Breadcrumb slot 1* to `Super+F8`, that combination is pre-filled — you can
+accept it with one click instead of choosing a key from scratch. (Bindings are
+read when OBS starts, so set them in *Settings → Hotkeys* first, then restart.)
+
+> The portal shortcut descriptions include your category names, but both the
+> names and the suggested triggers are captured when OBS starts — if you rename
+> categories or change the *Settings → Hotkeys* bindings, restart OBS so the
+> updated labels and defaults show up in `hyprctl globalshortcuts` / your
+> shortcut settings.
+>
+> **Hyprland ignores the suggested default** (and `hyprctl globalshortcuts` only
+> lists the id → description, never the trigger) — you always bind the key
+> yourself with the `global` dispatcher, as shown above. The pre-fill is a
+> KDE/GNOME convenience.
+>
 > The X11 session is unaffected: there OBS's normal global hotkeys work and the
 > portal isn't used.
 

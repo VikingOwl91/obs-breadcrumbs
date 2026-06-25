@@ -35,3 +35,9 @@ void breadcrumbs_set_categories(const std::array<std::string, BREADCRUMBS_SLOTS>
 // would. Used by alternative trigger paths such as the Wayland global-shortcuts
 // portal. Safe to call from the Qt UI thread.
 void breadcrumbs_trigger_slot(size_t slot);
+
+// Return the slot's current OBS hotkey binding rendered as a GlobalShortcuts
+// portal `preferred_trigger` string (e.g. "LOGO+F8", "CTRL+SHIFT+b"), or an
+// empty string if the slot is unbound or the key can't be mapped confidently.
+// Used as the suggested default when registering portal shortcuts on Wayland.
+std::string breadcrumbs_get_slot_trigger(size_t slot);

@@ -322,6 +322,80 @@ void breadcrumbs_trigger_slot(size_t slot)
 	add_breadcrumb(slot);
 }
 
+namespace {
+
+// Map an OBS key name ("OBS_KEY_F8", "OBS_KEY_B", "OBS_KEY_5") to the token the
+// portal trigger format expects ("F8", "b", "5"). Returns "" for anything we
+// can't confidently map, so we never suggest a malformed trigger — portals are
+// free to ignore preferred_trigger, and a bad one is worse than none.
+std::string obs_key_to_trigger_token(const char *key)
+{
+	if (!key)
+		return "";
+	const std::string s = key;
+	const std::string prefix = "OBS_KEY_";
+	if (s.compare(0, prefix.size(), prefix) != 0)
+		return "";
+	std::string core = s.substr(prefix.size());
+	if (core.empty() || core == "NONE")
+		return "";
+
+	// Function keys F1..F35 pass through unchanged.
+	if (core[0] == 'F' && core.size() >= 2) {
+		bool digits = true;
+		for (size_t i = 1; i < core.size(); i++)
+			if (core[i] < '0' || core[i] > '9')
+				digits = false;
+		if (digits)
+			return core;
+	}
+
+	// Single letter -> lowercase; single digit -> as-is.
+	if (core.size() == 1) {
+		char c = core[0];
+		if (c >= 'A' && c <= 'Z')
+			return std::string(1, (char)(c - 'A' + 'a'));
+		if (c >= '0' && c <= '9')
+			return core;
+	}
+
+	// Anything else (SPACE, punctuation, numpad, …) we leave unmapped rather
+	// than risk a token the portal can't parse.
+	return "";
+}
+
+} // namespace
+
+std::string breadcrumbs_get_slot_trigger(size_t slot)
+{
+	if (slot >= BREADCRUMBS_SLOTS)
+		return "";
+
+	obs_data_array_t *arr = obs_hotkey_save(g_hotkeys[slot]);
+	std::string trigger;
+	if (arr && obs_data_array_count(arr) > 0) {
+		// Use the first binding as the suggestion.
+		obs_data_t *item = obs_data_array_item(arr, 0);
+		std::string token = obs_key_to_trigger_token(obs_data_get_string(item, "key"));
+		if (!token.empty()) {
+			// Portal trigger format: modifiers + key, joined by '+'.
+			if (obs_data_get_bool(item, "control"))
+				trigger += "CTRL+";
+			if (obs_data_get_bool(item, "alt"))
+				trigger += "ALT+";
+			if (obs_data_get_bool(item, "shift"))
+				trigger += "SHIFT+";
+			if (obs_data_get_bool(item, "command"))
+				trigger += "LOGO+";
+			trigger += token;
+		}
+		obs_data_release(item);
+	}
+	if (arr)
+		obs_data_array_release(arr);
+	return trigger;
+}
+
 // --- module entry points ---
 
 bool obs_module_load(void)
