@@ -42,11 +42,11 @@ void breadcrumbs_open_config_dialog()
 
 	auto *layout = new QVBoxLayout(&dialog);
 
-	auto *intro = new QLabel(
+	const QString introText =
 		QStringLiteral("Name each marker category below.\n"
 			       "Bind a key to each one in Settings → Hotkeys (search \"Breadcrumb\").\n"
-			       "Empty names fall back to \"Marker N\"."),
-		&dialog);
+			       "Empty names fall back to \"Marker N\".");
+	auto *intro = new QLabel(introText, &dialog);
 	intro->setWordWrap(true);
 	layout->addWidget(intro);
 
